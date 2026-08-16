@@ -364,7 +364,11 @@ class SubsonicConnection:
         return song_id_list
 
     def build_song_list_from_playlist(self, id: str) -> list:
-        """Build a list of songs from a given playlist
+        """Build a list of songs from a given playlist.
+
+        Empty playlists return an empty list. A server response containing a
+        single entry dictionary is normalised to a one-item list so callers do
+        not have to special-case the response shape.
 
         :param str id: The playlist ID
         :return: A list of song IDs
@@ -373,12 +377,20 @@ class SubsonicConnection:
 
         self.logger.debug('In function build_song_list_from_playlist()')
 
-        song_id_list = []
         playlist_details = self.conn.getPlaylist(id)
+        playlist = playlist_details.get('playlist') or {}
+        entries = playlist.get('entry') or []
 
-        song_id_list = [song_detail.get('id') for song_detail in playlist_details.get('playlist').get('entry')]
+        if isinstance(entries, dict):
+            entries = [entries]
+        elif not isinstance(entries, list):
+            self.logger.warning('Playlist %s returned an unexpected entry type: %s', id, type(entries).__name__)
+            return []
 
-        return song_id_list
+        return [
+            song_detail.get('id') for song_detail in entries
+            if isinstance(song_detail, dict) and song_detail.get('id')
+        ]
 
     def build_song_list_from_favourites(self) -> Union[list, None]:
         """Build a shuffled list favourite songs
