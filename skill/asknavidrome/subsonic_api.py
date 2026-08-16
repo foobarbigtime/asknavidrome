@@ -2,6 +2,7 @@ from hashlib import md5
 from typing import Union
 import logging
 import random
+import re
 import secrets
 
 import libsonic
@@ -89,8 +90,45 @@ class SubsonicConnection:
 
         return None
 
+    @staticmethod
+    def _normalise_playlist_name(name: str, drop_automatic: bool = False) -> str:
+        """Normalise a playlist name for reliable voice matching.
+
+        Alexa may return spaces where a Navidrome playlist uses underscores,
+        hyphens or punctuation.  Normalisation keeps matching deterministic
+        without using fuzzy/partial matches that could select the wrong
+        playlist.
+
+        :param str name: Playlist name to normalise
+        :param bool drop_automatic: Ignore a trailing ``automatic`` token
+        :return: Normalised playlist name
+        :rtype: str
+        """
+
+        if not isinstance(name, str):
+            return ''
+
+        # casefold() gives stronger case-insensitive matching than lower().
+        # Treat punctuation, underscores and separators as word boundaries.
+        normalised = re.sub(r'[\W_]+', ' ', name.casefold()).strip()
+        normalised = ' '.join(normalised.split())
+
+        if drop_automatic:
+            tokens = normalised.split()
+            if tokens and tokens[-1] == 'automatic':
+                tokens.pop()
+            normalised = ' '.join(tokens)
+
+        return normalised
+
     def search_playlist(self, term: str) -> Union[str, None]:
-        """Search the media server for the given playlist
+        """Search the media server for the given playlist.
+
+        Matching is attempted in three increasingly relaxed stages:
+        exact case-insensitive name, separator/punctuation-normalised name,
+        then the same normalised comparison while ignoring a trailing
+        ``automatic`` token.  Ambiguous matches are rejected rather than
+        selecting an arbitrary playlist.
 
         :param str term: The name of the playlist
         :return: The ID of the playlist or None if the playlist is not found
@@ -99,27 +137,67 @@ class SubsonicConnection:
 
         self.logger.debug('In function search_playlist()')
 
+        if not isinstance(term, str) or not term.strip():
+            self.logger.error('Playlist search term was empty or invalid')
+            return None
+
+        term = term.strip()
         playlist_dict = self.conn.getPlaylists()
+        playlists = playlist_dict.get('playlists', {}).get('playlist', []) or []
+        playlists = [item for item in playlists if isinstance(item.get('name'), str)]
 
-        # Search the list of dictionaries for a playlist with a name that matches the search term
-        playlist_id_list = [item.get('id') for item in playlist_dict['playlists']['playlist'] if item.get('name').lower() == term.lower()]
+        # Stage 1: preserve the original behaviour first -- exact name,
+        # case-insensitive only.
+        matches = [item for item in playlists if item.get('name').casefold() == term.casefold()]
 
-        if len(playlist_id_list) == 1:
-            # We have matched the playlist return it
-            self.logger.debug(f'Found playlist {playlist_id_list[0]}')
-
-            return playlist_id_list[0]
-
-        elif len(playlist_id_list) > 1:
-            # More than one result was returned, this should not be possible
-            self.logger.error(f'More than one playlist called {term} was found, multiple playlists with the same name are not supported')
-
+        if len(matches) == 1:
+            self.logger.debug(f"Found playlist {matches[0].get('id')} by exact name match")
+            return matches[0].get('id')
+        elif len(matches) > 1:
+            self.logger.error(f'More than one playlist called {term} was found; refusing an ambiguous match')
             return None
 
-        elif len(playlist_id_list) == 0:
-            self.logger.error(f'No playlist matching the name {term} was found!')
+        # Stage 2: ignore differences that are awkward or impossible to speak,
+        # such as underscores, hyphens and punctuation.
+        normalised_term = self._normalise_playlist_name(term)
+        matches = [
+            item for item in playlists
+            if self._normalise_playlist_name(item.get('name')) == normalised_term
+        ]
 
+        if len(matches) == 1:
+            self.logger.debug(
+                f"Found playlist {matches[0].get('id')} by normalised name match: "
+                f"{matches[0].get('name')}"
+            )
+            return matches[0].get('id')
+        elif len(matches) > 1:
+            names = [item.get('name') for item in matches]
+            self.logger.error(f'Playlist name {term} matched multiple normalised names: {names}')
             return None
+
+        # Stage 3: AudioMuse automatic playlists commonly end in
+        # ``_automatic``.  Allow users to omit that implementation detail
+        # when speaking the playlist name.
+        relaxed_term = self._normalise_playlist_name(term, drop_automatic=True)
+        matches = [
+            item for item in playlists
+            if self._normalise_playlist_name(item.get('name'), drop_automatic=True) == relaxed_term
+        ]
+
+        if len(matches) == 1:
+            self.logger.debug(
+                f"Found playlist {matches[0].get('id')} while ignoring automatic suffix: "
+                f"{matches[0].get('name')}"
+            )
+            return matches[0].get('id')
+        elif len(matches) > 1:
+            names = [item.get('name') for item in matches]
+            self.logger.error(f'Playlist name {term} matched multiple relaxed names: {names}')
+            return None
+
+        self.logger.error(f'No playlist matching the name {term} was found!')
+        return None
 
     def search_artist(self, term: str) -> Union[dict, None]:
         """Search the media server for the given artist
