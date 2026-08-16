@@ -1,0 +1,62 @@
+name: Dynamic Playlist Checks
+
+on:
+  push:
+    branches:
+      - feature/dynamic-playlist-search
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v5.0.0
+
+      - name: Build Docker image from this checkout
+        run: docker build -t asknavidrome:dynamic-playlist-test .
+
+      - name: Compile Python source inside image
+        run: |
+          docker run --rm --entrypoint python3 asknavidrome:dynamic-playlist-test \
+            -m py_compile app.py asknavidrome/controller.py asknavidrome/media_queue.py asknavidrome/subsonic_api.py asknavidrome/track.py
+
+      - name: Verify fork code is packaged
+        run: |
+          docker run --rm --entrypoint sh asknavidrome:dynamic-playlist-test \
+            -c "grep -q 'NaviSonicListPlaylists' /opt/asknavidrome/app.py && grep -q '_normalise_playlist_name' /opt/asknavidrome/asknavidrome/subsonic_api.py"
+
+      - name: Test playlist edge cases
+        run: |
+          docker run --rm --entrypoint python3 asknavidrome:dynamic-playlist-test -c "
+          import logging
+          from asknavidrome.subsonic_api import SubsonicConnection
+          from asknavidrome.media_queue import MediaQueue
+
+          assert SubsonicConnection._normalise_playlist_name('Pop_Medium-Danceable Relaxed') == 'pop medium danceable relaxed'
+          assert SubsonicConnection._normalise_playlist_name('Pop_Medium_Danceable_Relaxed_automatic', drop_automatic=True) == 'pop medium danceable relaxed'
+
+          class FakeConn:
+              def __init__(self, payload):
+                  self.payload = payload
+              def getPlaylist(self, playlist_id):
+                  return self.payload
+
+          api = SubsonicConnection.__new__(SubsonicConnection)
+          api.logger = logging.getLogger('test')
+
+          api.conn = FakeConn({'playlist': {}})
+          assert api.build_song_list_from_playlist('empty') == []
+
+          api.conn = FakeConn({'playlist': {'entry': {'id': 'one'}}})
+          assert api.build_song_list_from_playlist('single') == ['one']
+
+          api.conn = FakeConn({'playlist': {'entry': [{'id': 'one'}, {'id': 'two'}, {'id': 'three'}]}})
+          assert api.build_song_list_from_playlist('multi') == ['one', 'two', 'three']
+
+          queue = MediaQueue()
+          assert queue.get_next_track() is None
+          assert queue.enqueue_next_track() is None
+          print('Dynamic playlist edge-case tests passed')
+          "
