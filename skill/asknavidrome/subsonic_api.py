@@ -199,6 +199,34 @@ class SubsonicConnection:
         self.logger.error(f'No playlist matching the name {term} was found!')
         return None
 
+    def get_playlist_names(self, automatic_only: bool = False) -> list:
+        """Return playlist names currently available from the media server.
+
+        :param bool automatic_only: Return only playlists ending in an
+                                    ``automatic`` token, such as AudioMuse
+                                    ``_automatic`` playlists.
+        :return: Playlist names sorted case-insensitively
+        :rtype: list[str]
+        """
+
+        self.logger.debug('In function get_playlist_names()')
+
+        playlist_dict = self.conn.getPlaylists()
+        playlists = playlist_dict.get('playlists', {}).get('playlist', []) or []
+        names = [
+            item.get('name') for item in playlists
+            if isinstance(item.get('name'), str) and item.get('name').strip()
+        ]
+
+        if automatic_only:
+            names = [
+                name for name in names
+                if self._normalise_playlist_name(name).split()
+                and self._normalise_playlist_name(name).split()[-1] == 'automatic'
+            ]
+
+        return sorted(names, key=str.casefold)
+
     def search_artist(self, term: str) -> Union[dict, None]:
         """Search the media server for the given artist
 
