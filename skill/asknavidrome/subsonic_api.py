@@ -1,6 +1,7 @@
 from hashlib import md5
 from typing import Union
 import logging
+import os
 import random
 import re
 import secrets
@@ -31,6 +32,11 @@ class SubsonicConnection:
         self.port = port
         self.api_location = api_location
         self.api_version = api_version
+
+        # API traffic can use a private Navidrome address while Alexa
+        # receives a publicly reachable HTTPS address for audio streaming.
+        self.stream_url = os.getenv('NAVI_STREAM_URL') or self.server_url
+        self.stream_port = os.getenv('NAVI_STREAM_PORT') or str(self.port)
 
         self.conn = libsonic.Connection(self.server_url,
                                         self.user,
@@ -487,7 +493,7 @@ class SubsonicConnection:
         # This creates a multiline f string, uri contains a single line with both
         # f strings.
         uri = (
-            f'{self.server_url}:{self.port}{self.api_location}/stream.view?f=json&v={self.api_version}&c=AskNavidrome&u='
+            f'{self.stream_url}:{self.stream_port}{self.api_location}/stream.view?f=json&v={self.api_version}&c=AskNavidrome&u='
             f'{self.user}&s={salt}&t={auth_token.hexdigest()}&id={id}'
         )
 
