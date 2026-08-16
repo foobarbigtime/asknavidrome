@@ -2,6 +2,7 @@ from collections import deque
 from copy import deepcopy
 import logging
 import random
+from typing import Optional
 
 from .track import Track
 
@@ -164,16 +165,21 @@ class MediaQueue:
         # Replace the original queue with the new shuffled one
         self.queue = new_queue
 
-    def get_next_track(self) -> Track:
+    def get_next_track(self) -> Optional[Track]:
         """Get the next track
 
-        Get the next track from self.queue and add it to the history deque
+        Get the next track from self.queue and add it to the history deque.
+        Returns None when the queue is empty instead of raising IndexError.
 
-        :return: The next track object
-        :rtype: Track
+        :return: The next track object, or None if no track is queued
+        :rtype: Track | None
         """
 
         self.logger.debug('In get_next_track()')
+
+        if not self.queue:
+            self.logger.debug('In get_next_track() - queue is empty')
+            return None
 
         if self.current_track.id == '' or self.current_track.id is None:
             # This is the first track
@@ -211,18 +217,23 @@ class MediaQueue:
 
         return self.current_track
 
-    def enqueue_next_track(self) -> Track:
+    def enqueue_next_track(self) -> Optional[Track]:
         """Get the next buffered track
 
         Get the next track from the buffer without updating the current track
         attribute.  This allows Amazon to send the PlaybackNearlyFinished
-        request early to queue the next track while maintaining the playlist
+        request early to queue the next track while maintaining the playlist.
+        Returns None when there is no next buffered track.
 
-        :return: The next track to be played
-        :rtype: Track
+        :return: The next track to be played, or None if the buffer is empty
+        :rtype: Track | None
         """
 
         self.logger.debug('In enqueue_next_track()')
+
+        if not self.buffer:
+            self.logger.debug('In enqueue_next_track() - buffer is empty')
+            return None
 
         return self.buffer.popleft()
 
