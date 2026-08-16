@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 #
 
 
-def start_playback(mode: str, text: str, card_data: dict, track_details: Track, handler_input: HandlerInput) -> Response:
+def start_playback(mode: str, text: str, card_data: dict, track_details: Union[Track, None], handler_input: HandlerInput) -> Response:
     """Function to play audio.
 
     Begin playing audio when:
@@ -37,11 +37,16 @@ def start_playback(mode: str, text: str, card_data: dict, track_details: Track, 
     :param str mode: play | continue - Play immediately or enqueue a track
     :param str text: Text which should be spoken before playback starts
     :param dict card_data: Data to display on a card
-    :param Track track_details: A Track object containing details of the track to use
+    :param Track track_details: A Track object containing details of the track to use, or None
     :param HandlerInput handler_input: The Amazon Alexa HandlerInput object
     :return: Amazon Alexa Response class
     :rtype: Response
     """
+
+    if track_details is None:
+        logger.debug('In start_playback() - no track available, returning without a Play directive')
+        return handler_input.response_builder.response
+
     metadata = AudioItemMetadata(
         title=track_details.title,
         subtitle=track_details.artist,
@@ -52,9 +57,9 @@ def start_playback(mode: str, text: str, card_data: dict, track_details: Track, 
                         url='https://github.com/navidrome/navidrome/raw/master/resources/logo-192x192.png'
                     )
                 ]
-            )                                                              
+            )
     )
-    
+
     if mode == 'play':
         # Starting playback
         logger.debug('In start_playback() - play mode')
