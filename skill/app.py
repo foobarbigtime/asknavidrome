@@ -188,6 +188,9 @@ logger.debug('MediaQueue object created...')
 # at the same time.
 backgroundProcess = None
 
+# Keep spoken playlist listings short enough to be useful on an Echo.
+PLAYLIST_PAGE_SIZE = 5
+
 # Connect to Navidrome
 connection = api.SubsonicConnection(navidrome_url,
                                     navidrome_user,
@@ -544,6 +547,59 @@ class NaviSonicPlayPlaylist(AbstractRequestHandler):
             return controller.start_playback('play', speech, card, track_details, handler_input)
 
 
+class NaviSonicListPlaylists(AbstractRequestHandler):
+    """List playlists currently available from Navidrome."""
+
+    def can_handle(self, handler_input: HandlerInput) -> bool:
+        return is_intent_name('NaviSonicListPlaylists')(handler_input)
+
+    def handle(self, handler_input: HandlerInput) -> Response:
+        logger.debug('In NaviSonicListPlaylists')
+        return build_playlist_listing_response(handler_input, automatic_only=False, offset=0)
+
+
+class NaviSonicListAutomaticPlaylists(AbstractRequestHandler):
+    """List AudioMuse-style automatic playlists currently available."""
+
+    def can_handle(self, handler_input: HandlerInput) -> bool:
+        return is_intent_name('NaviSonicListAutomaticPlaylists')(handler_input)
+
+    def handle(self, handler_input: HandlerInput) -> Response:
+        logger.debug('In NaviSonicListAutomaticPlaylists')
+        return build_playlist_listing_response(handler_input, automatic_only=True, offset=0)
+
+
+class NaviSonicMorePlaylists(AbstractRequestHandler):
+    """Read the next page of a playlist listing."""
+
+    def can_handle(self, handler_input: HandlerInput) -> bool:
+        return is_intent_name('NaviSonicMorePlaylists')(handler_input)
+
+    def handle(self, handler_input: HandlerInput) -> Response:
+        logger.debug('In NaviSonicMorePlaylists')
+
+        session_attributes = handler_input.attributes_manager.session_attributes
+        mode = session_attributes.get('playlist_listing_mode')
+
+        if mode not in ('all', 'automatic'):
+            speech = sanitise_speech_output(
+                'Ask me what playlists are available first, then you can ask for more playlists.'
+            )
+            handler_input.response_builder.speak(speech).ask(speech)
+            return handler_input.response_builder.response
+
+        try:
+            offset = int(session_attributes.get('playlist_listing_offset', 0))
+        except (TypeError, ValueError):
+            offset = 0
+
+        return build_playlist_listing_response(
+            handler_input,
+            automatic_only=(mode == 'automatic'),
+            offset=offset
+        )
+
+
 class NaviSonicPlayMusicByGenre(AbstractRequestHandler):
     """ Play songs from the given genre
 
@@ -569,7 +625,7 @@ class NaviSonicPlayMusicByGenre(AbstractRequestHandler):
         song_id_list = connection.build_song_list_from_genre(genre.value, min_song_count)
 
         if song_id_list is None:
-            text = sanitise_speech_output(f"I couldn't find any {genre.value} songs in the collection.")
+            text = sanitise_speech_output("I couldn't find any " + str(genre.value) + ' songs in the collection.')
             handler_input.response_builder.speak(text).ask(text)
 
             return handler_input.response_builder.response
@@ -1082,6 +1138,115 @@ def sanitise_speech_output(speech_string: str) -> str:
     return speech_string
 
 
+def playlist_name_for_speech(name: str) -> str:
+    """Convert a stored playlist name into something natural to speak."""
+
+    if not isinstance(name, str):
+        return ''
+
+    speech_name = name.replace('_', ' ').replace('-', ' ')
+    speech_name = ' '.join(speech_name.split())
+
+    # AudioMuse uses a trailing _automatic marker.  It is useful internally,
+    # but users should not have to hear or say it.
+    automatic_suffix = ' automatic'
+    if speech_name.casefold().endswith(automatic_suffix):
+        speech_name = speech_name[:-len(automatic_suffix)].rstrip()
+
+    return sanitise_speech_output(speech_name)
+
+
+def join_spoken_list(items: list) -> str:
+    """Join a short list of names into natural speech."""
+
+    if not items:
+        return ''
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f'{items[0]} and {items[1]}'
+
+    return ', '.join(items[:-1]) + f', and {items[-1]}'
+
+
+def clear_playlist_listing_state(session_attributes: dict) -> None:
+    """Remove pagination state from an Alexa session."""
+
+    session_attributes.pop('playlist_listing_mode', None)
+    session_attributes.pop('playlist_listing_offset', None)
+
+
+def build_playlist_listing_response(handler_input: HandlerInput,
+                                    automatic_only: bool,
+                                    offset: int) -> Response:
+    """Build a paginated spoken list of live Navidrome playlists."""
+
+    playlist_names = connection.get_playlist_names(automatic_only=automatic_only)
+    session_attributes = handler_input.attributes_manager.session_attributes
+
+    if not playlist_names:
+        clear_playlist_listing_state(session_attributes)
+        label = 'automatic playlists' if automatic_only else 'playlists'
+        speech = sanitise_speech_output(f'You do not have any {label} available.')
+        handler_input.response_builder.speak(speech)
+        return handler_input.response_builder.response
+
+    if offset < 0:
+        offset = 0
+
+    if offset >= len(playlist_names):
+        clear_playlist_listing_state(session_attributes)
+        speech = sanitise_speech_output('That is all of the available playlists.')
+        handler_input.response_builder.speak(speech)
+        return handler_input.response_builder.response
+
+    page = playlist_names[offset:offset + PLAYLIST_PAGE_SIZE]
+    spoken_names = [playlist_name_for_speech(name) for name in page]
+    spoken_names = [name for name in spoken_names if name]
+    names_text = join_spoken_list(spoken_names)
+    next_offset = offset + len(page)
+    has_more = next_offset < len(playlist_names)
+
+    if automatic_only:
+        singular_label = 'automatic playlist'
+        plural_label = 'automatic playlists'
+    else:
+        singular_label = 'playlist'
+        plural_label = 'playlists'
+
+    count_label = singular_label if len(playlist_names) == 1 else plural_label
+
+    if offset == 0:
+        if has_more:
+            speech = (
+                f'You have {len(playlist_names)} {count_label}. '
+                f'The first {len(page)} are {names_text}.'
+            )
+        else:
+            introduction = 'It is' if len(playlist_names) == 1 else 'They are'
+            speech = (
+                f'You have {len(playlist_names)} {count_label}. '
+                f'{introduction} {names_text}.'
+            )
+    else:
+        if has_more:
+            speech = f'The next playlists are {names_text}.'
+        else:
+            speech = f'The remaining playlists are {names_text}. That is all of them.'
+
+    if has_more:
+        session_attributes['playlist_listing_mode'] = 'automatic' if automatic_only else 'all'
+        session_attributes['playlist_listing_offset'] = next_offset
+        reprompt = sanitise_speech_output('Say more playlists to hear the next ones.')
+        speech = sanitise_speech_output(speech + ' ' + reprompt)
+        handler_input.response_builder.speak(speech).ask(reprompt)
+    else:
+        clear_playlist_listing_state(session_attributes)
+        handler_input.response_builder.speak(sanitise_speech_output(speech))
+
+    return handler_input.response_builder.response
+
+
 def queue_worker_thread(connection: object, play_queue: object, song_id_list: list) -> None:
     """Media queue worker
 
@@ -1111,6 +1276,9 @@ sb.add_request_handler(NaviSonicPlayMusicByArtist())
 sb.add_request_handler(NaviSonicPlayAlbumByArtist())
 sb.add_request_handler(NaviSonicPlaySongByArtist())
 sb.add_request_handler(NaviSonicPlayPlaylist())
+sb.add_request_handler(NaviSonicListPlaylists())
+sb.add_request_handler(NaviSonicListAutomaticPlaylists())
+sb.add_request_handler(NaviSonicMorePlaylists())
 sb.add_request_handler(NaviSonicPlayFavouriteSongs())
 sb.add_request_handler(NaviSonicPlayMusicByGenre())
 sb.add_request_handler(NaviSonicPlayMusicRandom())
