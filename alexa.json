@@ -85,6 +85,38 @@
                     ]
                 },
                 {
+                    "name": "NaviSonicListPlaylists",
+                    "slots": [],
+                    "samples": [
+                        "What playlists are available",
+                        "Which playlists are available",
+                        "List my playlists",
+                        "List playlists",
+                        "What playlists do I have"
+                    ]
+                },
+                {
+                    "name": "NaviSonicListAutomaticPlaylists",
+                    "slots": [],
+                    "samples": [
+                        "What automatic playlists are available",
+                        "Which automatic playlists are available",
+                        "List my automatic playlists",
+                        "List automatic playlists",
+                        "What automatic playlists do I have"
+                    ]
+                },
+                {
+                    "name": "NaviSonicMorePlaylists",
+                    "slots": [],
+                    "samples": [
+                        "More playlists",
+                        "List more playlists",
+                        "Give me more playlists",
+                        "What are the next playlists"
+                    ]
+                },
+                {
                     "name": "NaviSonicSongDetails",
                     "slots": [],
                     "samples": [
