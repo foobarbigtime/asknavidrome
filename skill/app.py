@@ -510,20 +510,32 @@ class NaviSonicPlayPlaylist(AbstractRequestHandler):
         global backgroundProcess
         logger.debug('In NaviSonicPlayPlaylist')
 
+        # Validate the requested playlist before touching the existing queue
+        # worker. Alexa can occasionally match this intent without capturing
+        # a slot value, which previously caused a NoneType exception.
+        playlist = get_slot_value_v2(handler_input, 'playlist')
+        playlist_value = getattr(playlist, 'value', None)
+
+        if not isinstance(playlist_value, str) or not playlist_value.strip():
+            text = sanitise_speech_output(
+                "I didn't catch the playlist name. Please say play playlist followed by the playlist name."
+            )
+            handler_input.response_builder.speak(text).ask(text)
+            return handler_input.response_builder.response
+
+        playlist_value = playlist_value.strip()
+
         # Check if a background process is already running, if it is then terminate the process
         # in favour of the new process.
         if backgroundProcess is not None:
             backgroundProcess.terminate()
             backgroundProcess.join()
 
-        # Get the requested playlist
-        playlist = get_slot_value_v2(handler_input, 'playlist')
-
         # Search for a playlist
-        playlist_id = connection.search_playlist(playlist.value)
+        playlist_id = connection.search_playlist(playlist_value)
 
         if playlist_id is None:
-            text = sanitise_speech_output("I couldn't find the playlist " + str(playlist.value) + ' in the collection.')
+            text = sanitise_speech_output("I couldn't find the playlist " + playlist_value + ' in the collection.')
             handler_input.response_builder.speak(text).ask(text)
 
             return handler_input.response_builder.response
@@ -537,7 +549,7 @@ class NaviSonicPlayPlaylist(AbstractRequestHandler):
             backgroundProcess = Process(target=queue_worker_thread, args=(connection, play_queue, song_id_list[2:]))  # Create a thread to enqueue the remaining tracks
             backgroundProcess.start()  # Start the additional thread
 
-            speech = sanitise_speech_output('Playing playlist ' + str(playlist.value))
+            speech = sanitise_speech_output('Playing playlist ' + playlist_value)
             logger.info(speech)
             card = {'title': 'AskNavidrome',
                     'text': speech
@@ -1344,7 +1356,7 @@ if navidrome_log_level == 3:
     def view_buffer():
         """View the contents of play_queue.buffer
 
-        Creates a tabulated page containing the contents of the play_queue.buffer deque.
+        Creates a tabulated page containing the contents of play_queue.buffer deque.
         """
 
         current_track = play_queue.get_current_track()
