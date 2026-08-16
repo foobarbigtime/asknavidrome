@@ -525,38 +525,50 @@ class NaviSonicPlayPlaylist(AbstractRequestHandler):
 
         playlist_value = playlist_value.strip()
 
-        # Check if a background process is already running, if it is then terminate the process
-        # in favour of the new process.
-        if backgroundProcess is not None:
-            backgroundProcess.terminate()
-            backgroundProcess.join()
-
-        # Search for a playlist
+        # Resolve and validate the new playlist before changing the current
+        # queue or its background worker. A misheard or empty playlist request
+        # should not disturb music that is already queued.
         playlist_id = connection.search_playlist(playlist_value)
 
         if playlist_id is None:
             text = sanitise_speech_output("I couldn't find the playlist " + playlist_value + ' in the collection.')
             handler_input.response_builder.speak(text).ask(text)
-
             return handler_input.response_builder.response
 
-        else:
-            song_id_list = connection.build_song_list_from_playlist(playlist_id)
-            play_queue.clear()
+        song_id_list = connection.build_song_list_from_playlist(playlist_id)
 
-            # Work around the Amazon / Alexa 8 second timeout.
-            controller.enqueue_songs(connection, play_queue, [song_id_list[0], song_id_list[1]])  # When generating the playlist return the first two tracks.
-            backgroundProcess = Process(target=queue_worker_thread, args=(connection, play_queue, song_id_list[2:]))  # Create a thread to enqueue the remaining tracks
-            backgroundProcess.start()  # Start the additional thread
+        if not song_id_list:
+            text = sanitise_speech_output('The playlist ' + playlist_value + ' is empty.')
+            handler_input.response_builder.speak(text).ask(text)
+            return handler_input.response_builder.response
 
-            speech = sanitise_speech_output('Playing playlist ' + playlist_value)
-            logger.info(speech)
-            card = {'title': 'AskNavidrome',
-                    'text': speech
-                    }
-            track_details = play_queue.get_next_track()
+        # Only now replace the existing queue worker with the validated
+        # playlist. This keeps failed requests from truncating a large queue.
+        if backgroundProcess is not None:
+            backgroundProcess.terminate()
+            backgroundProcess.join()
+            backgroundProcess = None
 
-            return controller.start_playback('play', speech, card, track_details, handler_input)
+        play_queue.clear()
+
+        # Enqueue up to the first two tracks synchronously so one-song and
+        # two-song playlists work without indexing beyond the list.
+        controller.enqueue_songs(connection, play_queue, song_id_list[:2])
+
+        # Longer playlists continue filling in the background to stay within
+        # Alexa's response-time limit.
+        if len(song_id_list) > 2:
+            backgroundProcess = Process(target=queue_worker_thread, args=(connection, play_queue, song_id_list[2:]))
+            backgroundProcess.start()
+
+        speech = sanitise_speech_output('Playing playlist ' + playlist_value)
+        logger.info(speech)
+        card = {'title': 'AskNavidrome',
+                'text': speech
+                }
+        track_details = play_queue.get_next_track()
+
+        return controller.start_playback('play', speech, card, track_details, handler_input)
 
 
 class NaviSonicListPlaylists(AbstractRequestHandler):
