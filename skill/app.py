@@ -199,10 +199,7 @@ connection = api.SubsonicConnection(navidrome_url,
                                     navidrome_api_location,
                                     navidrome_api_version)
 
-try:
-    connection.ping()
-
-except:
+if not connection.ping():
     raise RuntimeError('Could not connect to SubSonic API!')
 
 logger.info('AskNavidrome Web Service is ready to start!')
